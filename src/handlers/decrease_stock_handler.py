@@ -7,6 +7,7 @@ import requests
 from logger import Logger
 from handlers.handler import Handler
 from order_saga_state import OrderSagaState
+import config
 
 class DecreaseStockHandler(Handler):
     """ Handle the stock check-out of a given list of products and quantities. Trigger rollback of previous steps in case of failure. """
@@ -14,6 +15,7 @@ class DecreaseStockHandler(Handler):
     def __init__(self, order_item_data):
         """ Constructor method """
         self.order_item_data = order_item_data
+        self.product_id = 0
         super().__init__()
 
     def run(self):
@@ -27,20 +29,47 @@ class DecreaseStockHandler(Handler):
                     "operation": "-"
                 },
             """
-            response_ok = True
-            if response_ok:
+            response = requests.put(f'{config.API_GATEWAY_URL}/store-manager-api/stocks',
+                    json={
+                    "items": self.order_item_data,
+                    "operation": "-"
+                },
+                    headers={'Content-Type': 'application/json'})
+            self.logger.debug(response.content)
+            if response.ok:
+                data = response.json()
+                self.product_id = data['product_id'] if data else 0
                 self.logger.debug("La sortie des articles du stock a réussi")
                 return OrderSagaState.CREATING_PAYMENT
             else:
-                self.logger.error(f"Erreur : {response_ok}")
+                text = response.json()
+                self.logger.error(f"Erreur {response.status_code} : {text}")
                 return OrderSagaState.CANCELLING_ORDER
             
         except Exception as e:
-            self.logger.error("La sortie des articles du stock a échoué : " + str(e))
+            self.logger.error("La sortie des articles du stock a échoué : " + str(type(e)))
             return OrderSagaState.CANCELLING_ORDER
         
     def rollback(self):
         """ Call StoreManager to revert stock check out (in other words, check-in the previously checked-out product and quantity) """
         # TODO: effectuer une requête à /stocks pour modifier le stock
-        self.logger.debug("L'entrée des articles dans le stock a réussi")
-        return OrderSagaState.CANCELLING_ORDER
+        try:
+            response = requests.put(f'{config.API_GATEWAY_URL}/store-manager-api/stocks',
+                    json={
+                    "items": self.order_item_data,
+                    "operation": "+"
+                },
+                    headers={'Content-Type': 'application/json'})
+            if response.ok:
+                data = response.json()
+                self.product_id = data['product_id'] if data else 0
+                self.logger.debug("La sortie des articles du stock a réussi")
+                return OrderSagaState.CANCELLING_ORDER
+            else:
+                text = response.json()
+                self.logger.error(f"Erreur {response.status_code} : {text}")
+                return OrderSagaState.CREATING_PAYMENT
+            
+        except Exception as e:
+            self.logger.error("L'entrée des articles du stock a échoué : " + str(type(e)))
+            return OrderSagaState.CREATING_PAYMENT
