@@ -4,6 +4,7 @@ SPDX - License - Identifier: LGPL - 3.0 - or -later
 Auteurs : Gabriel C. Ullmann, Fabio Petrillo, 2025
 """
 import requests
+import config
 from logger import Logger
 from handlers.handler import Handler
 from order_saga_state import OrderSagaState
@@ -31,14 +32,40 @@ class CreatePaymentHandler(Handler):
             POST my-api-gateway-address/payments ...
             json={ voir collection Postman pour en savoir plus ... }
             """
-            response_ok = True
-            if response_ok:
+            response = requests.get(
+                f"{config.API_GATEWAY_URL}/store-manager-api/orders/{self.order_id}",
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.ok:
+                order_data = response.json()
+                self.total_amount = order_data.get("total_amount", 0)
+                self.logger.debug("La création d'une transaction de paiement a réussi")
+                #return OrderSagaState.COMPLETED
+            else:
+                text = response.json() 
+                self.logger.error(f"Erreur {response.status_code} : {text}")
+                return OrderSagaState.INCREASING_STOCK
+            
+            payment_payload = {
+                "order_id": self.order_id,
+                "amount": self.total_amount,
+                "user_id": self.user_id
+            }
+            response_payment = requests.post(
+                f"{config.API_GATEWAY_URL}/payment-api/payments",
+                json=payment_payload,
+                headers={"Content-Type": "application/json"}
+            )
+            if response_payment.ok:
+                order_data = response_payment.json()
                 self.logger.debug("La création d'une transaction de paiement a réussi")
                 return OrderSagaState.COMPLETED
             else:
-                self.logger.error(f"Erreur : {response_ok}")
+                text = response_payment.json()
+                self.logger.error(f"Erreur {response_payment.status_code} : {text}")
                 return OrderSagaState.INCREASING_STOCK
-
+            
         except Exception as e:
             self.logger.error("La création d'une transaction de paiement a échoué : " + str(e))
             return OrderSagaState.INCREASING_STOCK
